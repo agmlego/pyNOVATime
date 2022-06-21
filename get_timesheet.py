@@ -324,7 +324,7 @@ def login(secrets):
     return session
 
 
-if __name__ == '__main__':
+def main():
     # set up secrets info
     if not isfile('secrets.ini'):
         print('Please copy secrets.ini.example to secrets.ini and configure per the comments', file=sys.stderr)
@@ -381,3 +381,7 @@ if __name__ == '__main__':
     if clock_out is not None:
         print(
             f'\tAfter clocking in at {clock_in.format("HH:mm")}, clock out by {clock_out.format("HH:mm")} to hit {format_td(weekhours)}')
+
+
+if __name__ == '__main__':
+    main()
