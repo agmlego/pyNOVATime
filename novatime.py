@@ -410,6 +410,7 @@ class NOVATime:
         Returns:
             dict[str, str]: the resulting Pythonic dict
         """
+        self.logger.debug(f'ADO: {datalist}')
         if 'DataList' in datalist:
             datalist = datalist['DataList']
         data = {}
@@ -433,6 +434,7 @@ class NOVATime:
             '__VIEWSTATE': loginpage.find(id='__VIEWSTATE')['value'],
             '__VIEWSTATEGENERATOR': loginpage.find(id='__VIEWSTATEGENERATOR')['value'],
             '__VIEWSTATEENCRYPTED': loginpage.find(id='__VIEWSTATEENCRYPTED')['value'],
+            '__RequestVerificationToken': loginpage.find(attrs={'name': '__RequestVerificationToken'})['value'],
             'txtUserName': self.user.username,
             'txtPassword': self.user.password,
             "hUserAgent": self._secrets['header']['user-agent'],
@@ -457,6 +459,24 @@ class NOVATime:
             "hScreenHeight": "1080",
             "totalCount": "0"
         }
+
+        for hidden_input in loginpage.find_all(name='input', type='hidden', value=True):
+            if hidden_input.contents:
+                continue
+            id = ''
+            name = ''
+            value = ''
+            if hidden_input.has_attr('id'):
+                id = hidden_input['id']
+            if hidden_input.has_attr('name'):
+                name = hidden_input['name']
+            if hidden_input.has_attr('value'):
+                value = hidden_input['value']
+            id = id or name
+            if id not in data:
+                self.logger.warning(
+                    f'New input field not in request header: id={id} value={value}')
+
         return data
 
     def login(self):
@@ -480,10 +500,11 @@ class NOVATime:
                 cookie, value, domain=self.host, path='/')
 
         # POST the login request to the server
+        login_data = self._build_login_data(loginpage=loginpage)
         self.logger.debug(
-            f'Logging into NOVATime with user {self.user.username}')
+            f'Logging into NOVATime with user {self.user.username} details: {login_data}')
         response = self._session.post(uri, params={'CID': self.cid},
-                                      data=self._build_login_data(loginpage=loginpage))
+                                      data=login_data)
         if not response.ok:
             raise ValueError(
                 f'Bad response: {response.status_code} - {response.reason}')
@@ -775,3 +796,8 @@ class Timesheet:
             # not clocked in
             clock_out = None
         return clock_in, clock_out
+
+
+if __name__ == '__main__':
+    n = NOVATime()
+    n.login()
