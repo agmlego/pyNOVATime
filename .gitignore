@@ -133,3 +133,6 @@ secrets.ini
 
 # pay period files
 pay/*.json
+
+# Excel temp files
+~$*
