@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 # SPDX-License-Identifier: FAFOL
+# pylint: disable=logging-fstring-interpolation
 
 """Wrapper for the "REST API" for NOVATime"""
 
@@ -7,16 +8,18 @@ import configparser
 import json
 import logging
 import os
-import sys
+from dataclasses import dataclass
 from datetime import timedelta
 from os.path import isdir, isfile, join
-from typing import Any, Dict, List, NamedTuple
+from typing import Any, Dict, List
 
 import arrow
 import requests
 from bs4 import BeautifulSoup
+from rich.console import Console, ConsoleOptions, RenderResult
 from rich.logging import RichHandler
 from rich.progress import Progress
+from rich.table import Table
 
 PARAM_DATE_FORMAT = 'ddd MMM DD YYYY'
 PUNCH_FORMAT = 'MM/DD/YYYY HH:mm:ss'
@@ -27,7 +30,11 @@ PUNCH_DATEKEY_FORMAT = 'MM/DD'
 
 FORMAT = "%(message)s"
 logging.basicConfig(
-    level="DEBUG", format=FORMAT, datefmt="[%X]", handlers=[RichHandler(rich_tracebacks=True, tracebacks_suppress=[requests])]
+    level="DEBUG",
+    format=FORMAT,
+    datefmt="[%X]",
+    handlers=[RichHandler(rich_tracebacks=True,
+                          tracebacks_suppress=[requests])]
 )
 logging.getLogger("requests").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
@@ -43,14 +50,39 @@ def parse_date(date_str):
     return arrow.get(date_str, NOVA_DATE_FORMAT).replace(tzinfo='America/Detroit')
 
 
-class PayPeriod:
+@dataclass
+class DatePeriod:
+    """Pay period with start and end dates."""
     start: arrow.arrow.Arrow
     end: arrow.arrow.Arrow
 
     def __str__(self) -> str:
         return f'{self.start.date()}--{self.end.date()}'
 
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        yield f"[b]PayPeriod:[/b] {self.start} to {self.end}"
 
+
+@dataclass
+class GPS:
+    """GPS coordinates."""
+    latitude: float
+    longitude: float
+
+    def __str__(self) -> str:
+        return f'{self.latitude}, {self.longitude}'
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        yield f"[b]GPS:[/b] {self.latitude}, {self.longitude}"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "nGPSLatitude": self.latitude,
+            "nGPSLongitude": self.longitude
+        }
+
+
+@dataclass
 class User:
     username: str
     password: str
@@ -61,22 +93,62 @@ class User:
     last_name: str
     full_name: str
 
+    def __init__(self, username: str,
+                 password: str,
+                 user_seq: str = None,
+                 employee_seq: str = None,
+                 access_seq: str = None,
+                 first_name: str = None,
+                 last_name: str = None,
+                 full_name: str = None) -> None:
+        self.username = username
+        self.password = password
+        self.user_seq = user_seq
+        self.employee_seq = employee_seq
+        self.access_seq = access_seq
+        self.first_name = first_name
+        self.last_name = last_name
+        self.full_name = full_name
 
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        yield f"[b]User:[/b] #{self.full_name} ({self.username})"
+        my_table = Table("Attribute", "Value")
+        my_table.add_row("password", self.password)
+        my_table.add_row("user_seq", self.user_seq)
+        my_table.add_row("employee_seq", self.employee_seq)
+        my_table.add_row("access_seq", self.access_seq)
+        my_table.add_row("first_name", self.first_name)
+        my_table.add_row("last_name", self.last_name)
+        yield my_table
+
+
+@dataclass
 class HourTotals:
     last_week: timedelta
     this_week: timedelta
     total: timedelta
 
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        yield f"[b]HourTotals:[/b]"
+        my_table = Table("Attribute", "Value")
+        my_table.add_row("last_week", str(self.last_week))
+        my_table.add_row("this_week", str(self.this_week))
+        my_table.add_row("total", str(self.total))
+        yield my_table
 
+
+@dataclass
 class EntryCategory:
+    """Representation of an entry category in NOVATime."""
+    # pylint: disable=too-many-instance-attributes
+    # There is no good way to package these into fewer attributes, so pylint can blow it
     value: int
     description: str
     group_number: int
     group_seq: int
     group_code: str
     group_user_type: int
-    gps_latitude: float
-    gps_longitude: float
+    gps: GPS
     group_color: str
     group_value_description: str
     closed: bool
@@ -91,38 +163,108 @@ class EntryCategory:
         self.group_user_type = group['iGroupUserType']
         self.group_seq = group['iGroupValueSeq']
         self.closed = group['lClosed']
-        self.gps_latitude = group['nGPSLatitude']
-        self.gps_longitude = group['nGPSLongitude']
+        self.gps = GPS(latitude=group['nGPSLatitude'],
+                       longitude=group['nGPSLongitude'])
 
     def __str__(self) -> str:
         return f'{self.value} [{self.description or self.group_value_description}]'
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "iGroupNumber": self.group_number,
             "iGroupValueSeq": self.group_seq,
             "cGroupValue": str(self.value),
             "cGroupValueDescription": self.group_value_description,
             "cGroupCode": self.group_code,
             "iGroupUserType": self.group_user_type,
-            "nGPSLatitude": self.gps_latitude,
-            "nGPSLongitude": self.gps_longitude,
             "cGroupColor": self.group_color,
             "cDescription": self.description,
             "lClosed": self.closed
         }
+        d.update(self.gps.to_dict())
+        return d
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        yield f"[b]EntryCategory:[/b] #{self.group_value_description}"
+        my_table = Table("Attribute", "Value")
+        my_table.add_row("value", str(self.value))
+        my_table.add_row("description", self.description)
+        my_table.add_row("group_number", str(self.group_number))
+        my_table.add_row("group_seq", str(self.group_seq))
+        my_table.add_row("group_code", self.group_code)
+        my_table.add_row("group_user_type", str(self.group_user_type))
+        my_table.add_row("gps", self.gps)
+        my_table.add_row("group_color", self.group_color)
+        my_table.add_row("closed", str(self.closed))
+        yield my_table
 
 
+@dataclass
+class EntryCategoryGroup:
+    """Representation of a group of entry categories in NOVATime."""
+    value: int
+    name: str
+    options: Dict[str, EntryCategory]
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        yield f"[b]EntryCategoryGroup:[/b] {self.value} [{self.name}]"
+        my_table = Table('value',
+                         'group_value_description',
+                         'description',
+                         'group_number',
+                         'group_seq',
+                         'group_code',
+                         'group_user_type',
+                         'gps',
+                         'group_color',
+                         'closed')
+        for _, option in self.options.items():
+            my_table.add_row(str(option.value),
+                             option.group_value_description,
+                             option.description,
+                             str(option.group_number),
+                             str(option.group_seq),
+                             option.group_code,
+                             str(option.group_user_type),
+                             str(option.gps),
+                             option.group_color,
+                             str(option.closed))
+        yield my_table
+
+
+@dataclass
 class PayCode:
-    code: int
-    description: str
-    code_type: int
+    """Representation of the pay code fields in a NOVATime timesheet."""
+    code: int           # nPayCode
+    description: str    # cExpCode
+    code_type: int      # nCodeType
+    read_only: bool     # lPayCodeReadOnly
+    pay_type: str       # cPayType
+    policy: int         # nPayPolicy
+    policy_description: str  # cPayPolicyDescription
+    rate: float         # nPayRate
 
     def __str__(self) -> str:
         return f'{self.code}[{self.description}]'
 
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        yield f"[b]PayCode:[/b] #{self.code}"
+        my_table = Table("Attribute", "Value")
+        my_table.add_row("description", self.description)
+        my_table.add_row("code_type", str(self.code_type))
+        my_table.add_row("read_only", str(self.read_only))
+        my_table.add_row("pay_type", self.pay_type)
+        my_table.add_row("policy", str(self.policy))
+        my_table.add_row("policy_description", self.policy_description)
+        my_table.add_row("rate", str(self.rate))
+        yield my_table
 
+
+@dataclass
 class TimesheetEntryException:
+    """Representation of the exception fields in a NOVATime timesheet."""
+    # pylint: disable=too-many-instance-attributes
+    # There is no good way to package these into fewer attributes, so pylint can blow it
     overtime: bool
     tardy: bool
     early_out: bool
@@ -145,6 +287,16 @@ class TimesheetEntryException:
     unconfirmed_in: bool
     unconfirmed_out: bool
     late_out_to_meal: bool
+
+    def __str__(self) -> str:
+        out = []
+        for name, value in self.to_dict().items():
+            if value:
+                if isinstance(value, bool):
+                    out.append(name)
+                else:
+                    out.append(f'{name}={value}')
+        return '\n'.join(out)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -172,20 +324,83 @@ class TimesheetEntryException:
             "lLateOutToMealException": self.late_out_to_meal,
         }
 
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        yield f"[b]TimesheetEntryException:[/b]"
+        my_table = Table("Attribute", "Value")
+        my_table.add_row("overtime", str(self.overtime))
+        my_table.add_row("tardy", str(self.tardy))
+        my_table.add_row("early_out", str(self.early_out))
+        my_table.add_row("early_in", str(self.early_in))
+        my_table.add_row("late_out", str(self.late_out))
+        my_table.add_row("missing_punch", str(self.missing_punch))
+        my_table.add_row("meal_break_premium", str(self.meal_break_premium))
+        my_table.add_row("meal_desc", self.meal_desc)
+        my_table.add_row("under_pay", str(self.under_pay))
+        my_table.add_row("over_pay", str(self.over_pay))
+        my_table.add_row("tardy_grace", str(self.tardy_grace))
+        my_table.add_row("early_out_grace", str(self.early_out_grace))
+        my_table.add_row("unpaid_break", str(self.unpaid_break))
+        my_table.add_row("break_desc", self.break_desc)
+        my_table.add_row("auto_deduct_meal", str(self.auto_deduct_meal))
+        my_table.add_row("auto_meal_waived", str(self.auto_meal_waived))
+        my_table.add_row("unconfirmed_punch", str(self.unconfirmed_punch))
+        my_table.add_row("unconfirmed_in_punch", str(
+            self.unconfirmed_in_punch))
+        my_table.add_row("unconfirmed_out_punch", str(
+            self.unconfirmed_out_punch))
+        my_table.add_row("unconfirmed_in", str(self.unconfirmed_in))
+        my_table.add_row("unconfirmed_out", str(self.unconfirmed_out))
+        my_table.add_row("late_out_to_meal", str(self.late_out_to_meal))
+        yield my_table
 
+
+@dataclass
+class Punch:
+    punch: arrow.arrow.Arrow
+    adjust: arrow.arrow.Arrow
+    modified: bool
+    gps: GPS
+    site: str
+    og: arrow.arrow.Arrow
+    net_chk_fail: bool
+    expression: str
+    expression_save: str
+    timezone: arrow.arrow.Arrow
+    recording: Any
+
+
+@dataclass
 class TimesheetEntry:
-    timesheet: 'Timesheet'
-    sequence: int
-    pay_code: PayCode
-    punch_date: arrow.arrow.Arrow
-    work_date: arrow.arrow.Arrow
-    punch_in: arrow.arrow.Arrow
-    punch_out: arrow.arrow.Arrow
+    """Representation of a time entry in a NOVATime timesheet."""
+    # pylint: disable=too-many-instance-attributes
+    # There is no good way to package these into fewer attributes, so pylint can blow it
+    sheet_sequence: int     # iTimesheetSeq
+    pay_period: DatePeriod   # dPayPeriodStart, dPayPeriodEnd
+    work_period: DatePeriod   # dWorkPeriodStartDate, dWorkPeriodEndDate
+    entry_sequence: int     # iTimeSeq
+
+    # iEmployeeSeq, cEmployeeID, cEmployeeFirstName, cEmployeeLastName, cEmployeeFullName
+    employee: User
+
+    punch_date: arrow.arrow.Arrow   # dPunchDate (probably dWorkDate?)
+    work_date: arrow.arrow.Arrow    # dWorkDate
+
+    # tPunchDateTime (probably punch_in.start?)
+    punch_date_time: arrow.arrow.Arrow
+
+    # dIn, nAdjustIn, lInMod, cInGPS, cSiteIn, dOGIn, lInNetChkFail, cInExpression, cInExpressionSave, nTZIn, mInRecording
+    punch_in: Punch
+
+    # dOut, nAdjustOut, lOutMod, cOutGPS, cSiteOut, dOGOut, lOutNetChkFail, cOutExpression, cOutExpressionSave, nTZOut, mOutRecording
+    punch_out: Punch
+
+    pay_code: PayCode       # nPayCode, cExpCode, cPayCodeDescription, nCodeType
     categories: List[EntryCategory]
     exceptions: List[TimesheetEntryException]
     shift_expression: str
-    site_in: str
-    site_out: str
+
+    def __init__(self, entry: Dict[str, Any]) -> None:
+        pass
 
     def work_hours(self) -> float:
         pass
@@ -352,7 +567,7 @@ class TimesheetEntry:
 class NOVATime:
     """Wrapper for the "REST API" for NOVATime"""
     timesheet: 'Timesheet'
-    user: User
+    groups: Dict[str, EntryCategoryGroup]
 
     def __init__(self):
         self.logger = logging.getLogger('NOVATime')
@@ -371,9 +586,12 @@ class NOVATime:
         self.api_url = f'{self.host}/{self.page}/{self.cid}'
         self.logger.debug(f'API URI: {self.api_url}')
 
-        self.user = User()
-        self.user.username = self._secrets['user']['user']
-        self.user.password = self._secrets['user']['password']
+        self.user = User(
+            username=self._secrets['user']['user'],
+            password=self._secrets['user']['password']
+        )
+
+        self.groups = {}
 
         self._session = requests.Session()
 
@@ -523,12 +741,15 @@ class NOVATime:
             self.user.user_seq = '0'
         self.user.employee_seq = user_data['EMPSEQ']
 
-        pay_period = PayPeriod()
-        pay_period.start = parse_date(user_data['PPSTART'])
-        pay_period.end = parse_date(user_data['PPEND'])
+        pay_period = DatePeriod(
+            start=parse_date(user_data['PPSTART']),
+            end=parse_date(user_data['PPEND'])
+        )
 
-        self.logger.debug(
-            f'User {self.user.username} has user_seq {self.user.user_seq} and employee_seq {self.user.employee_seq}, with pay period {pay_period}')
+        self.logger.debug(f'User {self.user.username} has '
+                          f'user_seq {self.user.user_seq} and '
+                          f'employee_seq {self.user.employee_seq}, '
+                          f'with pay period {pay_period}')
 
         self.timesheet = Timesheet(novatime=self,
                                    pay_period=pay_period,
@@ -540,7 +761,7 @@ class NOVATime:
             {'EmployeeSeq': self.user.employee_seq,
              'UserSeq': self.user.user_seq})
 
-        # the employee record contains an access ID we need for other requests, add it to the secrets
+        # fill out the user record with other data
         self.logger.debug(
             f'Asking for NOVATime employee record for {self.user.username}')
         user_data = self._session.get(
@@ -551,11 +772,14 @@ class NOVATime:
         self.user.last_name = user_data['Data']['cLastName']
         self.user.full_name = user_data['Data']['cFullName']
 
-        self.logger.debug(
-            f'User {self.user.username} is {self.user.first_name} {self.user.last_name} ({self.user.full_name}) with access_seq {self.user.access_seq}')
+        self.logger.debug(f'User {self.user.username} is '
+                          f'{self.user.first_name} {self.user.last_name} '
+                          f'({self.user.full_name}) with access_seq {self.user.access_seq}')
         self.get_groups()
+        for group in self.groups:
+            self.get_group_options(group=group)
 
-    def get_timesheet(self, pay_period: PayPeriod = None):
+    def get_timesheet(self, pay_period: DatePeriod = None):
         """Download the timesheet and populate internal data.
 
         Here there be dragons. This does no error-checking, and is brittle as most scrapers are.
@@ -568,7 +792,9 @@ class NOVATime:
         if pay_period is not None:
             timesheet = Timesheet(novatime=self,
                                   pay_period=pay_period,
-                                  weekhours=timedelta(hours=int(self._secrets['hours']['weekhours'])))
+                                  weekhours=timedelta(
+                                      hours=int(self._secrets['hours']['weekhours']))
+                                  )
         else:
             timesheet = self.timesheet
             pay_period = timesheet.pay_period
@@ -609,25 +835,48 @@ class NOVATime:
         # ok we made it! process the current pay period
         self.timesheet.parse_timesheet(raw_timesheet)
 
-    def get_groups(self):
+    def get_groups(self) -> Dict[str, EntryCategoryGroup]:
+        """
+        Fetch the mapping of groups
+
+        Returns:
+            Dict[str,EntryCategoryGroup]: the internal dict mapping group name to details
+        """
         # build uri, parameters, and headers
         uri = f'https://{self.api_url}/systemsetting'
         self.logger.debug('Getting groups:')
         response = self._session.get(uri)
-        self.groups = {}
         for group in response.json()['GROUPLIST']:
-            self.groups[group['cGroupCaption']] = group['iGroupNumber']
+            self.groups[group['cGroupCaption']] = EntryCategoryGroup(
+                value=group['iGroupNumber'],
+                name=group['cGroupCaption'],
+                options={}
+            )
             self.logger.debug(
                 f"\t{group['cGroupCaption']}: {group['iGroupNumber']}")
         return self.groups
 
-    def get_group_options(self, group):
+    def get_group_options(self, group: str) -> EntryCategoryGroup:
+        """
+        Fetch the options for a given group.
+
+        Args:
+            group (str): One of the groups in self.group
+
+        Raises:
+            ValueError: on error fetching group options
+
+        Returns:
+            EntryCategoryGroup: the options for the given group
+        """
         # build uri, parameters, and headers
         uri = f'https://{self.api_url}/Group/GetPagedGroups'
         items_per_page = 10
         page = 1
+        group_options = self.groups[group]
+        group_options.options = {}
         parameters = {
-            'GroupNumber': str(self.groups[group]),
+            'GroupNumber': str(group_options.value),
             'UserAccessSeq': str(self.user.user_seq),
             'EmployeeAccessSeq': str(self.user.access_seq),
             'PrimaryGroupNumber': '0',
@@ -647,31 +896,40 @@ class NOVATime:
             'SelectedEmployeeSeq': str(self.user.employee_seq),
             'FilterJobGroups': 'false',
         }
-        data = []
-        self.logger.debug(f'Getting options for group {group}')
+
+        self.logger.debug(f'Getting options for group {group_options.name}')
         with Progress(transient=True) as progress:
             group_task = progress.add_task(
-                f'Getting options for group {group}:', total=None)
+                f'Getting options for group {group_options.name}:', total=None)
             while not progress.finished:
                 response = self._session.get(uri, params=parameters)
                 group_data = response.json()
                 if group_data['_errorCode'] != 1:
                     raise ValueError(
-                        f"Error getting group {group}: {group_data['_errorCode']} - {group_data['_errorDescription']}")
+                        f"Error getting group {group_options.name}: {group_data['_errorCode']} - "
+                        f"{group_data['_errorDescription']}")
                 items = group_data['Data']['ItemTotal']
                 if page == 1:
                     progress.update(group_task, total=items)
                     progress.start_task(group_task)
                 progress.update(group_task, advance=len(
                     group_data['Data']['PagedList']))
-                data += group_data['Data']['PagedList']
-                if len(data) < items:
+                for option in map(EntryCategory, group_data['Data']['PagedList']):
+                    if option.group_seq in group_options.options:
+                        old = group_options.options[option.group_seq]
+                        new = option
+                        self.logger.warning(f'Overwriting {option.group_seq}:'
+                                            f'{old} ({old.group_seq})'
+                                            f'->{new} ({new.group_seq})')
+                    group_options.options[option.group_seq] = option
+                if len(group_options.options) < items:
                     page += 1
                     parameters['CurrentPage'] = str(page)
                     continue
-                else:
-                    self.logger.debug(f'Got {len(data)} of {items} for {group}')
-        return list(map(EntryCategory, data))
+                self.logger.debug(
+                    f'Got {len(group_options.options)} of {items} for {group_options.name}')
+            self.groups[group_options.name] = group_options
+        return group_options
 
 
 class Timesheet:
@@ -679,10 +937,10 @@ class Timesheet:
     entries = Dict[arrow.arrow.Arrow, TimesheetEntry]
     hours: HourTotals
     exceptions = None
-    pay_period: PayPeriod
+    pay_period: DatePeriod
     remaining: timedelta
 
-    def __init__(self, novatime: NOVATime, pay_period: PayPeriod, weekhours: timedelta):
+    def __init__(self, novatime: NOVATime, pay_period: DatePeriod, weekhours: timedelta):
         self.novatime = novatime
         self.pay_period = pay_period
         self.weekhours = weekhours
