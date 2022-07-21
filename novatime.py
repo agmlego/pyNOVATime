@@ -11,9 +11,10 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from os.path import isdir, isfile, join
+from re import L
 import shelve
 from shelve import DbfilenameShelf
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Tuple, Union
 
 import arrow
 import requests
@@ -34,6 +35,7 @@ PUNCH_FORMAT = 'MM/DD/YYYY HH:mm:ss'
 PUNCH_TIME_FORMAT = 'HH:mmA'
 NOVA_DATE_FORMAT = 'M/D/YYYY'
 PUNCH_DATEKEY_FORMAT = 'MM/DD'
+WRITE_ENTRY_FORMAT = 'YYYY-MM-DDTHH:mm:ss.SSS[Z]'
 
 
 FORMAT = "%(message)s"
@@ -219,7 +221,7 @@ class EntryCategory:
     value: int
     description: str
     group_number: int
-    group_seq: str
+    group_seq: int
     group_code: str
     group_user_type: int
     gps: GPS
@@ -235,7 +237,7 @@ class EntryCategory:
         self.group_value_description = group['cGroupValueDescription']
         self.group_number = group['iGroupNumber']
         self.group_user_type = group['iGroupUserType']
-        self.group_seq = str(group['iGroupValueSeq'])
+        self.group_seq = group['iGroupValueSeq']
         self.closed = group['lClosed']
         self.gps = GPS(latitude=group['nGPSLatitude'],
                        longitude=group['nGPSLongitude'])
@@ -246,7 +248,7 @@ class EntryCategory:
     def to_dict(self) -> Dict[str, Any]:
         d = {
             "iGroupNumber": self.group_number,
-            "iGroupValueSeq": int(self.group_seq),
+            "iGroupValueSeq": self.group_seq,
             "cGroupValue": self.value,
             "cGroupValueDescription": self.group_value_description,
             "cGroupCode": self.group_code,
@@ -256,6 +258,16 @@ class EntryCategory:
             "lClosed": self.closed,
         }
         d.update(self.gps.to_dict())
+        return d
+
+    def write_dict(self) -> Dict[str, Any]:
+        d = {
+            "iGroupNumber": self.group_number,
+            "iGroupValueSeq": int(self.group_seq),
+            "cGroupValue": self.value,
+            "cGroupValueDescription": self.group_value_description,
+            "isValid": True,
+        }
         return d
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
@@ -279,17 +291,68 @@ class EntryCategoryGroup:
     """Representation of a group of entry categories in NOVATime."""
     value: int
     name: str
-    options: DbfilenameShelf
 
     def __init__(self, value: int, name: str) -> None:
         self.value = value
         self.name = name
 
-        self.options = shelve.open(os.path.join(
-            'pay', self.name), writeback=True)
+    def __getitem__(self, value: str) -> EntryCategory:
+        with shelve.open(os.path.join('pay', self.name)) as options:
+            if isinstance(value, int):
+                value = str(value)
+            try:
+                return options[value]
+            except KeyError:
+                print(self)
+                raise
 
-    def __del__(self):
-        self.options.close()
+    def __setitem__(self, value: str, option: EntryCategory) -> None:
+        with shelve.open(os.path.join('pay', self.name)) as options:
+            options[value] = option
+
+    def __len__(self) -> int:
+        l = 0
+        with shelve.open(os.path.join('pay', self.name)) as options:
+            l = len(options)
+        return l
+
+    def __contains__(self, value: str) -> bool:
+        val = False
+        with shelve.open(os.path.join('pay', self.name)) as options:
+            val = value in options
+        return val
+
+    def update(self, options: List[EntryCategory]):
+        with shelve.open(os.path.join('pay', self.name), writeback=True) as group_options:
+            for option in options:
+                if option.value in group_options:
+                    old = group_options[option.value]
+                    new = option
+                    self.logger.warning(f'Overwriting {option.value}:'
+                                        f'{old} ({old.value})'
+                                        f'->{new} ({new.value})')
+                group_options[option.value] = option
+
+    def has_key(self, value: str) -> bool:
+        return self.__contains__(value)
+
+    def keys(self) -> List[str]:
+        keys = []
+        with shelve.open(os.path.join('pay', self.name)) as options:
+            keys = [k for k in options.keys()]
+        return keys
+
+    def values(self) -> List[EntryCategory]:
+        values = []
+        with shelve.open(os.path.join('pay', self.name)) as options:
+            values = [v for v in options.values()]
+        return values
+
+    def items(self) -> List[Tuple[str, EntryCategory]]:
+        items = []
+        with shelve.open(os.path.join('pay', self.name)) as options:
+            items = [(k, v) for k, v in options.items()]
+        return items
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
         # pylint: disable=unused-argument
@@ -304,17 +367,18 @@ class EntryCategoryGroup:
                          'gps',
                          'group_color',
                          'closed')
-        for _, option in self.options.items():
-            my_table.add_row(str(option.value),
-                             option.group_value_description,
-                             option.description,
-                             str(option.group_number),
-                             str(option.group_seq),
-                             option.group_code,
-                             str(option.group_user_type),
-                             str(option.gps),
-                             option.group_color,
-                             str(option.closed))
+        with shelve.open(os.path.join('pay', self.name)) as options:
+            for _, option in options.items():
+                my_table.add_row(str(option.value),
+                                 option.group_value_description,
+                                 option.description,
+                                 str(option.group_number),
+                                 str(option.group_seq),
+                                 option.group_code,
+                                 str(option.group_user_type),
+                                 str(option.gps),
+                                 option.group_color,
+                                 str(option.closed))
         yield my_table
 
 
@@ -905,8 +969,10 @@ class TimesheetEntry:
 
         self.work_period = DatePeriod(start=entry["dWorkPeriodStartDate"],
                                       end=entry["dWorkPeriodEndDate"])
-
-        self.entry_sequence = entry["iTimeSeq"]
+        try:
+            self.entry_sequence = entry["iTimeSeq"]
+        except KeyError:
+            self.entry_sequence = -1
 
         self.employee = User(employee_seq=entry["iEmployeeSeq"],
                              username=entry["cEmployeeID"],
@@ -1121,6 +1187,7 @@ class TimesheetEntry:
         self.last_modified = entry["tLastModified"]
         self.carryover_expansion_override = entry["CarryoverExpansionOverride"]
         self.assign_id = entry["cAssignID"]
+        self.copy_color = 'darkgrey'
 
     def to_dict(self) -> Dict[str, Any]:
         d = {
@@ -1202,6 +1269,42 @@ class TimesheetEntry:
         d.update(self.status.to_dict())
         d.update(self.schedule.to_dict())
         d.update(self.note.to_dict())
+
+    def write_dict(self) -> Dict[str, Any]:
+        d = {
+            "iTimeSeq": self.entry_sequence,
+            "iEmployeeSeq": self.employee.employee_seq,
+            "copyColor": self.copy_color,
+            "lUnauthorizedOT": self.exceptions.unauthorized_ot,
+            "lCalcOverride": self.status.calc_override,
+            "iTimesheetSeq": self.sheet_sequence,
+            "cIn_Mod": self.punch_in.modified or "",
+            "cOut_Mod": self.punch_out.modified or "",
+            "isUnEditable": False,
+            # "$$hashKey": "object:264",
+            "payCodeDisplayText": "",
+            "dPunchDate": self.punch_date.to('utc').format(WRITE_ENTRY_FORMAT),
+            "dWorkDate": self.work_date.to('utc').format(WRITE_ENTRY_FORMAT),
+            "nPayCode": self.pay_code.code,
+            "nCodeType": self.pay_code.code_type,
+            "nCalculate": self.status.calculate,
+            "lRefTime": self.status.ref_time,
+            "lChanged": True,
+            "dIn": self.punch_in.punch.to('utc').format(WRITE_ENTRY_FORMAT),
+            "dOut": self.punch_out.punch.to('utc').format(WRITE_ENTRY_FORMAT),
+        }
+        d["GroupValueList"] = [category.write_dict()
+                               for category in self.categories[:4]] or None
+        d.update({
+            "focusGroup": 0,
+            "cNotes": self.note.notes,
+            "lHasError": False,
+            "lAllowOverlapHours": False,
+            "isPAPaycode": False,
+            "lOverlappingTime": False,
+            "lPendingCalc": True
+        })
+        return d
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
         # pylint: disable=unused-argument
@@ -1565,7 +1668,7 @@ class NOVATime:
         """
         # build uri, parameters, and headers
         uri = f'https://{self.api_url}/Group/GetPagedGroups'
-        items_per_page = 10
+        items_per_page = 100
         page = 1
         group_options = self.groups[group]
         parameters = {
@@ -1603,7 +1706,7 @@ class NOVATime:
                         f"Error getting group {group_options.name}: {group_data['_errorCode']} - "
                         f"{group_data['_errorDescription']}")
                 items = group_data['Data']['ItemTotal']
-                if len(group_options.options) == items:
+                if len(group_options) == items:
                     self.logger.info(f'Already have all {items} for {group}')
                     progress.update(group_task, completed=True)
                     break
@@ -1612,23 +1715,45 @@ class NOVATime:
                     progress.start_task(group_task)
                 progress.update(group_task, advance=len(
                     group_data['Data']['PagedList']))
-                for option in map(EntryCategory, group_data['Data']['PagedList']):
-                    if option.group_seq in group_options.options:
-                        old = group_options.options[option.group_seq]
-                        new = option
-                        self.logger.warning(f'Overwriting {option.group_seq}:'
-                                            f'{old} ({old.group_seq})'
-                                            f'->{new} ({new.group_seq})')
-                    group_options.options[option.group_seq] = option
-                if len(group_options.options) < items:
+                options = list(map(EntryCategory, group_data['Data']['PagedList']))
+                group_options.update(options)
+                if len(group_options) < items:
                     page += 1
                     parameters['CurrentPage'] = str(page)
                     continue
                 self.logger.debug(
-                    f'Got {len(group_options.options)} of {items} for {group_options.name}')
+                    f'Got {len(group_options)} of {items} for {group_options.name}')
             self.groups[group_options.name] = group_options
-            self.groups[group_options.name].options.sync()
         return group_options
+
+    def write_entries(self, entries: List[TimesheetEntry]) -> None:
+        # build uri, parameters, and headers
+        uri = f'https://{self.api_url}/timesheetdetail'
+        parameters = {
+            'AccessSeq': self.user.access_seq,
+            'EmployeeSeq': self.user.employee_seq,
+            'UserSeq': self.user.user_seq,
+            "lOverWritePayPeriod": False,
+            "readOnlyTimerecSeqList": "",
+            "PolicyGroup": "",
+            "showDaily": False
+        }
+        new_entries = [entry.write_dict() for entry in entries]
+        json.dump(new_entries, open(os.path.join(
+            'pay', 'sample_new_entries.json'), mode='w', encoding='utf-8'))
+        response = self._session.post(uri, params=parameters,
+                                      json=new_entries, verify=False)
+        if not response.ok:
+            raise ValueError(
+                f'Bad response: {response.status_code} - {response.reason}')
+        if not response.json()['_errorCode'] == 1:
+            raise ValueError(f'API Error: {response.json()}')
+
+        for result, entry in zip(response.json()['DataList'], entries):
+            if result['Success']:
+                self.logger.debug(f'Wrote {entry} successfully')
+            else:
+                self.logger.warning(f'Error writing {entry}: {result}')
 
 
 class Timesheet:
@@ -1751,7 +1876,42 @@ if __name__ == '__main__':
     n.login()
     n.get_timesheet()
     # n.timesheet.make_timesheet_report()
-    for date, entries in n.timesheet.entries.items():
-        print(date)
-        for entry in entries:
-            print(entry)
+    # for date, entries in n.timesheet.entries.items():
+    #     print(date)
+    #     for entry in entries:
+    #         print(entry)
+    from copy import deepcopy
+    temp_entry = deepcopy(
+        n.timesheet.entries[arrow.get('2022-07-21', tzinfo='America/Detroit')][0])
+    entries = []
+    temp_entry.entry_sequence = -1
+    temp_entry.punch_date = arrow.get('2022-07-22T00:00:00Z')
+    temp_entry.work_date = arrow.get('2022-07-22T00:00:00Z')
+
+    temp_entry.punch_in.punch = arrow.get('2022-07-22T08:00:00Z')
+    if temp_entry.punch_out is None:
+        temp_entry.punch_out = deepcopy(temp_entry.punch_in)
+    temp_entry.punch_out.punch = arrow.get('2022-07-22T11:00:00Z')
+    temp_entry.note.notes = 'Python test 1'
+
+    entries.append(deepcopy(temp_entry))
+
+    temp_entry.punch_in.punch = arrow.get('2022-07-22T11:00:00Z')
+    if temp_entry.punch_out is None:
+        temp_entry.punch_out = deepcopy(temp_entry.punch_in)
+    temp_entry.punch_out.punch = arrow.get('2022-07-22T11:30:00Z')
+    temp_entry.note.notes = 'Python test 2'
+    temp_entry.categories[1] = n.groups['Function'][134]
+
+    entries.append(deepcopy(temp_entry))
+
+    temp_entry.punch_in.punch = arrow.get('2022-07-22T11:30:00Z')
+    if temp_entry.punch_out is None:
+        temp_entry.punch_out = deepcopy(temp_entry.punch_in)
+    temp_entry.punch_out.punch = arrow.get('2022-07-22T17:00:00Z')
+    temp_entry.note.notes = 'Python test 3'
+    temp_entry.categories[1] = n.groups['Function'][113]
+    temp_entry.categories[2] = n.groups['Project #'][2008]
+
+    entries.append(deepcopy(temp_entry))
+    n.write_entries(entries)
