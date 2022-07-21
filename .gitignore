@@ -136,3 +136,8 @@ pay/*.json
 
 # Excel temp files
 ~$*
+
+# shelve files
+*.bak
+*.dir
+*.dat

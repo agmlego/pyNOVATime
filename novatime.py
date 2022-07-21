@@ -11,6 +11,8 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from os.path import isdir, isfile, join
+import shelve
+from shelve import DbfilenameShelf
 from typing import Any, Dict, List, Union
 
 import arrow
@@ -73,7 +75,7 @@ class DatePeriod:
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
         # pylint: disable=unused-argument
-        yield f"[b]PayPeriod:[/b] {self.start} to {self.end}"
+        yield f"[b]DatePeriod:[/b] {self.start} to {self.end}"
 
 
 @dataclass
@@ -217,7 +219,7 @@ class EntryCategory:
     value: int
     description: str
     group_number: int
-    group_seq: int
+    group_seq: str
     group_code: str
     group_user_type: int
     gps: GPS
@@ -233,7 +235,7 @@ class EntryCategory:
         self.group_value_description = group['cGroupValueDescription']
         self.group_number = group['iGroupNumber']
         self.group_user_type = group['iGroupUserType']
-        self.group_seq = group['iGroupValueSeq']
+        self.group_seq = str(group['iGroupValueSeq'])
         self.closed = group['lClosed']
         self.gps = GPS(latitude=group['nGPSLatitude'],
                        longitude=group['nGPSLongitude'])
@@ -244,7 +246,7 @@ class EntryCategory:
     def to_dict(self) -> Dict[str, Any]:
         d = {
             "iGroupNumber": self.group_number,
-            "iGroupValueSeq": self.group_seq,
+            "iGroupValueSeq": int(self.group_seq),
             "cGroupValue": self.value,
             "cGroupValueDescription": self.group_value_description,
             "cGroupCode": self.group_code,
@@ -277,7 +279,17 @@ class EntryCategoryGroup:
     """Representation of a group of entry categories in NOVATime."""
     value: int
     name: str
-    options: Dict[str, EntryCategory]
+    options: DbfilenameShelf
+
+    def __init__(self, value: int, name: str) -> None:
+        self.value = value
+        self.name = name
+
+        self.options = shelve.open(os.path.join(
+            'pay', self.name), writeback=True)
+
+    def __del__(self):
+        self.options.close()
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
         # pylint: disable=unused-argument
@@ -660,6 +672,7 @@ class TimesheetEntryNote:
         my_table.add_row("reason_code", str(self.reason_code))
         my_table.add_row("reason_color", str(self.reason_color))
         my_table.add_row("id", str(self.id))
+        yield my_table
 
 
 @dataclass
@@ -742,6 +755,7 @@ class TimesheetEntryStatus:
         my_table.add_row("calculate", str(self.calculate))
         my_table.add_row("reverse_status", str(self.reverse_status))
         my_table.add_row("read_only_reason", str(self.read_only_reason))
+        yield my_table
 
 
 @dataclass
@@ -802,6 +816,7 @@ class Punch:
         my_table.add_row("expression_save", self.expression_save)
         my_table.add_row("timezone", str(self.timezone))
         my_table.add_row("recording", str(self.recording))
+        yield my_table
 
 
 @dataclass
@@ -997,18 +1012,18 @@ class TimesheetEntry:
             total=entry["nTotalPay"],
         )
 
+        self.categories = []
         if entry["GroupValueList"]:
-            self.categories = []
             for group in entry["GroupValueList"]:
                 self.categories.append(EntryCategory(group))
 
+        self.accessible_group_list = []
         if entry["AccessibleGroupList"]:
-            self.accessible_group_list = []
             for group in entry["AccessibleGroupList"]:
                 self.accessible_group_list.append(EntryCategory(group))
 
+        self.invalid_group_list = []
         if entry["InvalidGroupList"]:
-            self.invalid_group_list = []
             for group in entry["InvalidGroupList"]:
                 self.invalid_group_list.append(EntryCategory(group))
 
@@ -1017,8 +1032,8 @@ class TimesheetEntry:
         self.group_level = entry["cGroupLevel"]
         self.group_code = entry["cGroupCode"]
 
+        self.expected_meal_times = {}
         if entry["ExpectedMealTimes"]:
-            self.expected_meal_times = {}
             for meal_time in entry["ExpectedMealTimes"]:
                 self.expected_meal_times[meal_time["iIndex"]] = DatePeriod(
                     start=meal_time["tStartTime"],
@@ -1172,16 +1187,16 @@ class TimesheetEntry:
         d.update(self.redirect_overtime_hours.to_dict())
         d.update(self.pay_code.to_dict())
         d["GroupValueList"] = [category.to_dict()
-                               for category in self.categories]
+                               for category in self.categories] or None
         d["AccessibleGroupList"] = [category.to_dict()
-                                    for category in self.accessible_group_list]
+                                    for category in self.accessible_group_list] or None
         d["InvalidGroupList"] = [category.to_dict()
-                                 for category in self.invalid_group_list]
+                                 for category in self.invalid_group_list] or None
         d["Grouping"] = self.grouping.to_dict()
 
         d["ExpectedMealTimes"] = [{"iIndex": idx,
                                    "tStartTime": period.start,
-                                   "tEndTime": period.end} for idx, period in self.expected_meal_times.items()]
+                                   "tEndTime": period.end} for idx, period in self.expected_meal_times.items()] or None
 
         d.update(self.exceptions.to_dict())
         d.update(self.status.to_dict())
@@ -1203,7 +1218,8 @@ class TimesheetEntry:
         my_table.add_row("punch_out", str(self.punch_out))
         my_table.add_row("pay_code", str(self.pay_code))
         my_table.add_row("categories", str(self.categories))
-        my_table.add_row("accessible_group_list", str(self.accessible_group_list))
+        my_table.add_row("accessible_group_list",
+                         str(self.accessible_group_list))
         my_table.add_row("invalid_group_list", str(self.invalid_group_list))
         my_table.add_row("grouping", str(self.grouping))
         my_table.add_row("exceptions", str(self.exceptions))
@@ -1227,15 +1243,21 @@ class TimesheetEntry:
         my_table.add_row("work_hours", str(self.work_hours))
         my_table.add_row("expected_meal_times", str(self.expected_meal_times))
         my_table.add_row("overtime_hours", str(self.overtime_hours))
-        my_table.add_row("redirect_overtime_hours", str(self.redirect_overtime_hours))
+        my_table.add_row("redirect_overtime_hours",
+                         str(self.redirect_overtime_hours))
         my_table.add_row("comp_overtime_hours", str(self.comp_overtime_hours))
-        my_table.add_row("raw_comp_overtime_hours", str(self.raw_comp_overtime_hours))
+        my_table.add_row("raw_comp_overtime_hours",
+                         str(self.raw_comp_overtime_hours))
         my_table.add_row("schedule", str(self.schedule))
         my_table.add_row("note", str(self.note))
         my_table.add_row("status", str(self.status))
-        my_table.add_row("carryover_expansion_override", str(self.carryover_expansion_override))
-        my_table.add_row("overtime_total_hours_one_punch", str(self.overtime_total_hours_one_punch))
+        my_table.add_row("carryover_expansion_override",
+                         str(self.carryover_expansion_override))
+        my_table.add_row("overtime_total_hours_one_punch",
+                         str(self.overtime_total_hours_one_punch))
         my_table.add_row("record_type", str(self.record_type))
+        yield my_table
+
 
 class NOVATime:
     """Wrapper for the "REST API" for NOVATime"""
@@ -1522,8 +1544,7 @@ class NOVATime:
         for group in response.json()['GROUPLIST']:
             self.groups[group['cGroupCaption']] = EntryCategoryGroup(
                 value=group['iGroupNumber'],
-                name=group['cGroupCaption'],
-                options={}
+                name=group['cGroupCaption']
             )
             self.logger.debug(
                 f"\t{group['cGroupCaption']}: {group['iGroupNumber']}")
@@ -1547,7 +1568,6 @@ class NOVATime:
         items_per_page = 10
         page = 1
         group_options = self.groups[group]
-        group_options.options = {}
         parameters = {
             'GroupNumber': str(group_options.value),
             'UserAccessSeq': str(self.user.user_seq),
@@ -1583,6 +1603,10 @@ class NOVATime:
                         f"Error getting group {group_options.name}: {group_data['_errorCode']} - "
                         f"{group_data['_errorDescription']}")
                 items = group_data['Data']['ItemTotal']
+                if len(group_options.options) == items:
+                    self.logger.info(f'Already have all {items} for {group}')
+                    progress.update(group_task, completed=True)
+                    break
                 if page == 1:
                     progress.update(group_task, total=items)
                     progress.start_task(group_task)
@@ -1603,6 +1627,7 @@ class NOVATime:
                 self.logger.debug(
                     f'Got {len(group_options.options)} of {items} for {group_options.name}')
             self.groups[group_options.name] = group_options
+            self.groups[group_options.name].options.sync()
         return group_options
 
 
@@ -1725,7 +1750,7 @@ if __name__ == '__main__':
     n = NOVATime()
     n.login()
     n.get_timesheet()
-    #n.timesheet.make_timesheet_report()
+    # n.timesheet.make_timesheet_report()
     for date, entries in n.timesheet.entries.items():
         print(date)
         for entry in entries:
