@@ -1748,8 +1748,6 @@ class NOVATime:
             "userseq": str(self.user.user_seq) or '',
         }
         new_entries = [entry.write_dict() for entry in entries]
-        json.dump(new_entries, open(os.path.join(
-            'pay', 'sample_new_entries.json'), mode='w', encoding='utf-8'))
         response = self._session.post(uri, params=parameters,
                                       json=new_entries, headers=headers, verify=False)
         if not response.ok:
