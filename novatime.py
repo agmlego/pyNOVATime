@@ -1715,7 +1715,8 @@ class NOVATime:
                     progress.start_task(group_task)
                 progress.update(group_task, advance=len(
                     group_data['Data']['PagedList']))
-                options = list(map(EntryCategory, group_data['Data']['PagedList']))
+                options = list(
+                    map(EntryCategory, group_data['Data']['PagedList']))
                 group_options.update(options)
                 if len(group_options) < items:
                     page += 1
@@ -1744,7 +1745,7 @@ class NOVATime:
             "sec-fetch-dest": "empty",
             "sec-fetch-mode": "cors",
             "sec-gpc": "1",
-            "userseq":"",
+            "userseq": str(self.user.user_seq) or '',
         }
         new_entries = [entry.write_dict() for entry in entries]
         json.dump(new_entries, open(os.path.join(
