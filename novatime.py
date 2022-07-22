@@ -1738,11 +1738,19 @@ class NOVATime:
             "PolicyGroup": "",
             "showDaily": False
         }
+        headers = {
+            "accept": "application/json, text/plain, */*",
+            "content-type": "application/json;charset=utf-8",
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-gpc": "1",
+            "userseq":"",
+        }
         new_entries = [entry.write_dict() for entry in entries]
         json.dump(new_entries, open(os.path.join(
             'pay', 'sample_new_entries.json'), mode='w', encoding='utf-8'))
         response = self._session.post(uri, params=parameters,
-                                      json=new_entries, verify=False)
+                                      json=new_entries, headers=headers, verify=False)
         if not response.ok:
             raise ValueError(
                 f'Bad response: {response.status_code} - {response.reason}')
@@ -1885,31 +1893,33 @@ if __name__ == '__main__':
         n.timesheet.entries[arrow.get('2022-07-21', tzinfo='America/Detroit')][0])
     entries = []
     temp_entry.entry_sequence = -1
-    temp_entry.punch_date = arrow.get('2022-07-22T00:00:00Z')
-    temp_entry.work_date = arrow.get('2022-07-22T00:00:00Z')
+    temp_entry.punch_date = arrow.get('2022-07-23T00:00:00Z')
+    temp_entry.work_date = arrow.get('2022-07-23T00:00:00Z')
 
-    temp_entry.punch_in.punch = arrow.get('2022-07-22T08:00:00Z')
+    temp_entry.punch_in.punch = arrow.get('2022-07-23T08:30:00Z')
     if temp_entry.punch_out is None:
         temp_entry.punch_out = deepcopy(temp_entry.punch_in)
-    temp_entry.punch_out.punch = arrow.get('2022-07-22T11:00:00Z')
-    temp_entry.note.notes = 'Python test 1'
+    temp_entry.punch_out.punch = arrow.get('2022-07-23T11:00:00Z')
+    temp_entry.note.notes = 'Test 1'
 
     entries.append(deepcopy(temp_entry))
 
-    temp_entry.punch_in.punch = arrow.get('2022-07-22T11:00:00Z')
+    temp_entry.punch_in.punch = arrow.get('2022-07-23T11:00:00Z')
     if temp_entry.punch_out is None:
         temp_entry.punch_out = deepcopy(temp_entry.punch_in)
-    temp_entry.punch_out.punch = arrow.get('2022-07-22T11:30:00Z')
-    temp_entry.note.notes = 'Python test 2'
-    temp_entry.categories[1] = n.groups['Function'][134]
+    temp_entry.punch_out.punch = arrow.get('2022-07-23T11:30:00Z')
+    temp_entry.note.notes = 'Test 2'
+    temp_entry.categories[0] = n.groups['Department'][101]
+    temp_entry.categories[1] = n.groups['Function'][133]
 
     entries.append(deepcopy(temp_entry))
 
-    temp_entry.punch_in.punch = arrow.get('2022-07-22T11:30:00Z')
+    temp_entry.punch_in.punch = arrow.get('2022-07-23T11:30:00Z')
     if temp_entry.punch_out is None:
         temp_entry.punch_out = deepcopy(temp_entry.punch_in)
-    temp_entry.punch_out.punch = arrow.get('2022-07-22T17:00:00Z')
-    temp_entry.note.notes = 'Python test 3'
+    temp_entry.punch_out.punch = arrow.get('2022-07-23T17:00:00Z')
+    temp_entry.note.notes = 'Test 3'
+    temp_entry.categories[0] = n.groups['Department'][800]
     temp_entry.categories[1] = n.groups['Function'][113]
     temp_entry.categories[2] = n.groups['Project #'][2008]
 
