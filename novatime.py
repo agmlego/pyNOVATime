@@ -8,16 +8,18 @@ import configparser
 import json
 import logging
 import os
+import shelve
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from os.path import isdir, isfile, join
-from re import L
-import shelve
-from shelve import DbfilenameShelf
 from typing import Any, Dict, List, Tuple, Union
 
 import arrow
 import requests
+# HACK Until BRSU fixes the SSL proxy, this makes things quieter with `verify=False`
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# end HACK
 from bs4 import BeautifulSoup
 from rich import print
 from rich.console import Console, ConsoleOptions, RenderResult
@@ -25,10 +27,7 @@ from rich.logging import RichHandler
 from rich.progress import Progress
 from rich.table import Table
 
-# HACK Until BRSU fixes the SSL proxy, this makes things quieter with `verify=False`
-import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-# end HACK
+
 
 PARAM_DATE_FORMAT = 'ddd MMM DD YYYY'
 PUNCH_FORMAT = 'MM/DD/YYYY HH:mm:ss'
