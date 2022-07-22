@@ -294,6 +294,7 @@ class EntryCategoryGroup:
     def __init__(self, value: int, name: str) -> None:
         self.value = value
         self.name = name
+        self.logger = logging.getLogger('EntryCategoryGroup')
 
     def __getitem__(self, value: str) -> EntryCategory:
         with shelve.open(os.path.join('pay', self.name)) as options:
